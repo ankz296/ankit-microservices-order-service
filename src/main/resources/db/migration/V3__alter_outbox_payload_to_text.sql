@@ -1,0 +1,2 @@
+ALTER TABLE order_outbox
+ALTER COLUMN payload TYPE TEXT;
