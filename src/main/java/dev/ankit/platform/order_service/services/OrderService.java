@@ -29,7 +29,7 @@ public class OrderService {
         Order order = Order.builder()
                 .userId(request.getUserId())
                 .totalAmount(request.getTotalAmount())
-                .status(OrderStatus.CREATED)
+                .status(OrderStatus.ORDER_CREATED)
                 .build();
 
         Order saved = orderRepository.save(order);
@@ -46,7 +46,7 @@ public class OrderService {
 
         OrderOutbox outbox = OrderOutbox.builder()
                 .aggregateId(saved.getId())
-                .eventType("ORDER_CREATED")
+                .eventType(OrderStatus.ORDER_CREATED)
                 .payload(payloadJson)
                 .status(OutboxStatus.NEW)
                 .build();
