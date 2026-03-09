@@ -6,6 +6,7 @@ import dev.ankit.platform.order_service.domain.OrderStatus;
 import dev.ankit.platform.order_service.dto.CreateOrderRequest;
 import dev.ankit.platform.order_service.dto.OrderResponse;
 import dev.ankit.platform.order_service.exception.OrderNotFoundException;
+import dev.ankit.platform.order_service.outbox.EventType;
 import dev.ankit.platform.order_service.outbox.OrderOutbox;
 import dev.ankit.platform.order_service.outbox.OutboxStatus;
 import dev.ankit.platform.order_service.repository.OrderOutboxRepository;
@@ -29,7 +30,7 @@ public class OrderService {
         Order order = Order.builder()
                 .userId(request.getUserId())
                 .totalAmount(request.getTotalAmount())
-                .status(OrderStatus.ORDER_CREATED)
+                .status(OrderStatus.CREATED)
                 .build();
 
         Order saved = orderRepository.save(order);
@@ -46,7 +47,7 @@ public class OrderService {
 
         OrderOutbox outbox = OrderOutbox.builder()
                 .aggregateId(saved.getId())
-                .eventType(OrderStatus.ORDER_CREATED)
+                .eventType(EventType.ORDER_CREATED.name())
                 .payload(payloadJson)
                 .status(OutboxStatus.NEW)
                 .build();

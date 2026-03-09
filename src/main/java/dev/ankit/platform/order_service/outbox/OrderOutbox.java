@@ -1,6 +1,5 @@
 package dev.ankit.platform.order_service.outbox;
 
-import dev.ankit.platform.order_service.domain.OrderStatus;
 import jakarta.persistence.*;
 import lombok.*;
 
@@ -24,7 +23,7 @@ public class OrderOutbox {
     private UUID aggregateId; // orderId
 
     @Column(name = "event_type", nullable = false, length = 100)
-    private OrderStatus eventType;
+    private String eventType;
 
     @Column(name = "payload", nullable = false, columnDefinition = "jsonb")
     private String payload; // store JSON as String
