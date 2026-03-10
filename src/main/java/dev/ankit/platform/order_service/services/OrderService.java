@@ -12,11 +12,13 @@ import dev.ankit.platform.order_service.outbox.OutboxStatus;
 import dev.ankit.platform.order_service.repository.OrderOutboxRepository;
 import dev.ankit.platform.order_service.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class OrderService {
@@ -89,4 +91,40 @@ public class OrderService {
             throw new RuntimeException("Failed to serialize outbox payload", e);
         }
     }
+
+
+    @Transactional
+    public void markPaymentCompleted(UUID orderId) {
+        Order order = orderRepository.findByIdForUpdate(orderId)
+                .orElseThrow(() -> new IllegalArgumentException("Order not found: " + orderId));
+
+        // ✅ idempotency: if already final, ignore
+        if (order.getStatus() == OrderStatus.PAYMENT_COMPLETED) {
+            log.info("ℹ️ Order already PAYMENT_COMPLETED orderId={}", orderId);
+            return;
+        }
+
+        order.setStatus(OrderStatus.PAYMENT_COMPLETED);
+        // No explicit save() needed if entity is managed in transaction
+        //transaction end pe Hibernate automatically dirty checking karta hai
+        log.info("✅ Order updated to PAYMENT_COMPLETED orderId={}", orderId);
+    }
+
+    @Transactional
+    public void markPaymentFailed(UUID orderId) {
+        Order order = orderRepository.findByIdForUpdate(orderId)
+                .orElseThrow(() -> new IllegalArgumentException("Order not found: " + orderId));
+
+        // ✅ idempotency: if already failed, ignore
+        if (order.getStatus() == OrderStatus.PAYMENT_FAILED) {
+            log.info("ℹ️ Order already PAYMENT_FAILED orderId={}", orderId);
+            return;
+        }
+
+        order.setStatus(OrderStatus.PAYMENT_FAILED);
+        // No explicit save() needed if entity is managed in transaction
+        //transaction end pe Hibernate automatically dirty checking karta hai
+        log.info("✅ Order updated to PAYMENT_FAILED orderId={}", orderId);
+    }
+
 }
