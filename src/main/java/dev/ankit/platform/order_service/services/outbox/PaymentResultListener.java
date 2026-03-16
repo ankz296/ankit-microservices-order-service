@@ -37,7 +37,7 @@ public class PaymentResultListener {
             }
 
 
-            if (!idempotencyService.tryMarkProcessed(eventId, "order-service.payment-processed")) {
+            if (!idempotencyService.tryMarkProcessed(eventId, "order-service.payment-processed",EventType.PAYMENT_PROCESSED.name(), event.getOrderId())) {
                 log.info("🔁 Duplicate payment.processed ignored eventId={}", eventId);
                 return;
             }
@@ -65,7 +65,7 @@ public class PaymentResultListener {
                 throw new IllegalArgumentException("Missing eventId in payment.failed payload");
             }
 
-            if (!idempotencyService.tryMarkProcessed(eventId, "order-service.payment-failed")) {
+            if (!idempotencyService.tryMarkProcessed(eventId, "order-service.payment-failed",EventType.PAYMENT_FAILED.name(),event.getOrderId())) {
                 log.info("🔁 Duplicate payment.failed ignored eventId={}", eventId);
                 return;
             }

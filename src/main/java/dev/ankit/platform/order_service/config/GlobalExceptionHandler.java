@@ -1,6 +1,7 @@
 package dev.ankit.platform.order_service.config;
 
 
+import dev.ankit.platform.order_service.exception.DownstreamUnavailableException;
 import dev.ankit.platform.order_service.exception.ErrorResponse;
 import dev.ankit.platform.order_service.exception.OrderNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
@@ -54,4 +55,18 @@ public class GlobalExceptionHandler {
                         .build()
         );
     }
+
+    @ExceptionHandler(dev.ankit.platform.order_service.exception.DownstreamUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handleDownstreamUnavailable(DownstreamUnavailableException ex, HttpServletRequest req) {
+//        return ResponseEntity.status(503).body(new ErrorResponse("DOWNSTREAM_UNAVAILABLE", ex.getMessage()));
+        return ResponseEntity.status(503).body(
+                ErrorResponse.builder()
+                        .message("DOWNSTREAM_UNAVAILABLE" + ex.getMessage())
+                        .path(req.getRequestURI())
+                        .status(503)
+                        .timestamp(OffsetDateTime.now())
+                        .build()
+        );
+    }
+
 }

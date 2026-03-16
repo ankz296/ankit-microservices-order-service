@@ -1,7 +1,10 @@
 package dev.ankit.platform.order_service.services;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.ankit.platform.order_service.client.ProductClient;
+import dev.ankit.platform.order_service.client.UserClient;
 import dev.ankit.platform.order_service.domain.Order;
+import dev.ankit.platform.order_service.domain.OrderItem;
 import dev.ankit.platform.order_service.domain.OrderStatus;
 import dev.ankit.platform.order_service.dto.CreateOrderRequest;
 import dev.ankit.platform.order_service.dto.OrderResponse;
@@ -16,6 +19,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.math.BigDecimal;
 import java.util.*;
 
 @Slf4j
@@ -26,17 +30,48 @@ public class OrderService {
     private final OrderRepository orderRepository;
     private final OrderOutboxRepository outboxRepository;
     private final ObjectMapper objectMapper; // Spring Boot auto-configured
+    private final UserClient userClient;
+    private final DownstreamValidationService downstreamValidationService;
 
     @Transactional
     public OrderResponse createOrder(CreateOrderRequest request) {
-        Order order = Order.builder()
-                .userId(request.getUserId())
-                .totalAmount(request.getTotalAmount())
-                .status(OrderStatus.CREATED)
-                .build();
+
+        // 1) User validation
+        UserClient.UserInternalDto user = downstreamValidationService.fetchUser(request.userId());
+
+        if (!user.active()) {
+            throw new IllegalArgumentException("User is not active: " + request.userId());
+        }
+
+
+        // 2) Product validation + pricing (choose bulk or loop)
+        // Option A: loop calls (quick)
+        var pricedItems = new ArrayList<ProductClient.ProductInternalDto>();
+
+        for (CreateOrderRequest.OrderItemRequest item : request.items()) {
+            ProductClient.ProductInternalDto p = downstreamValidationService.fetchProduct(item.productId());
+            if (!p.available() || p.stock() == null || p.stock() < item.quantity()) {
+                throw new IllegalArgumentException("Product not available/insufficient stock: " + item.productId());
+            }
+            pricedItems.add(new ProductClient.ProductInternalDto(item.productId(), true,item.quantity(), p.price()));
+        }
+
+        // 3) Create order + items
+        Order order = new Order();
+        BigDecimal total = BigDecimal.ZERO;
+
+        for (ProductClient.ProductInternalDto pi : pricedItems) {
+            OrderItem oi = new OrderItem(pi.productId(), pi.stock(), pi.price());
+            order.addItem(oi);
+            total = total.add(oi.getLineTotal());
+        }
+
+        order.setUserId(request.userId());
+        order.setTotalAmount(total);
+        order.setStatus(OrderStatus.CREATED);
 
         Order saved = orderRepository.save(order);
-
+        // 4) Outbox: order.created (include items + total)
         // ✅ Outbox event (Kafka-ready)
         Map<String, Object> eventPayload = new LinkedHashMap<>();
         eventPayload.put("orderId", saved.getId());

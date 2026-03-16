@@ -61,9 +61,8 @@ public class OutboxPublisher {
     private String resolveTopic(EventType eventType) {
         return switch (eventType) {
             case ORDER_CREATED -> TOPIC_ORDER_CREATED;
-            case PAYMENT_PROCESSED -> null;
-            case PAYMENT_FAILED -> null;
             case ORDER_CANCELLED -> TOPIC_ORDER_CANCELLED;
+            default -> throw new IllegalStateException("Unsupported eventType for outbox: " + eventType);
         };
     }
 
