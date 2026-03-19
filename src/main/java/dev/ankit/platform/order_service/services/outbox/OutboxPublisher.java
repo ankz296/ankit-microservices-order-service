@@ -21,42 +21,60 @@ public class OutboxPublisher {
 
     private static final String TOPIC_ORDER_CREATED = "order.created";
     private static final String TOPIC_ORDER_CANCELLED = "order.cancelled";
+
     private final OrderOutboxRepository outboxRepository;
     private final KafkaTemplate<String, String> kafkaTemplate;
 
-    @Scheduled(fixedDelayString = "5000") // every 5 seconds
+    @Scheduled(fixedDelayString = "5000")
     @Transactional
     public void publishNewEvents() {
+
         List<OrderOutbox> events = outboxRepository.findByStatus(OutboxStatus.NEW);
 
         if (events.isEmpty()) {
+            log.debug("No NEW outbox events found");
             return;
         }
 
-        log.info("📦 Outbox NEW events found: {}", events.size());
+        log.info("Outbox NEW events found count={}", events.size());
 
         for (OrderOutbox event : events) {
             try {
                 String topic = resolveTopic(EventType.valueOf(event.getEventType()));
-                assert topic != null;
+
+                log.info("Publishing event topic={}, orderId={}, outboxId={}",
+                        topic, event.getAggregateId(), event.getId());
+
                 kafkaTemplate.send(
                         topic,
-                        event.getAggregateId().toString(),   // key = orderId
-                        event.getPayload()                   // value = JSON string
-                );
+                        event.getAggregateId().toString(),
+                        event.getPayload()
+                ).whenComplete((result, ex) -> {
+                    if (ex != null) {
+                        log.error("Kafka send failed topic={}, orderId={}, error={}",
+                                topic, event.getAggregateId(), ex.getMessage(), ex);
+                    } else {
+                        log.debug("Kafka send success topic={}, partition={}, offset={}",
+                                topic,
+                                result.getRecordMetadata().partition(),
+                                result.getRecordMetadata().offset());
+                    }
+                });
 
                 event.setStatus(OutboxStatus.PUBLISHED);
-                log.info("✅ Published OutboxId={} aggregateId={} eventType={}",
-                        event.getId(), event.getAggregateId(), event.getEventType());
+
+                log.info("Outbox event marked PUBLISHED outboxId={}, orderId={}",
+                        event.getId(), event.getAggregateId());
 
             } catch (Exception ex) {
+
                 event.setStatus(OutboxStatus.FAILED);
-                log.error("❌ Publish failed OutboxId={} aggregateId={}",
-                        event.getId(), event.getAggregateId(), ex);
+
+                log.error("Outbox publish failed outboxId={}, orderId={}, error={}",
+                        event.getId(), event.getAggregateId(), ex.getMessage(), ex);
             }
         }
     }
-
 
     private String resolveTopic(EventType eventType) {
         return switch (eventType) {
@@ -65,5 +83,4 @@ public class OutboxPublisher {
             default -> throw new IllegalStateException("Unsupported eventType for outbox: " + eventType);
         };
     }
-
 }

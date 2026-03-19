@@ -22,9 +22,13 @@ public class ProductClient {
         try {
             return webClient.get()
                     .uri("http://product-service/internal/products/{id}", productId)
-                    .retrieve()
+                    .retrieve() // Timeout, Network glitch,5xx errors (server error)
+                    //When should NOT retry?
+                    //❌ 400 validation error
+                    //❌ Business rule failure
+                    //❌ Resource not found (404)
                     .bodyToMono(ProductInternalDto.class)
-                    .block(Duration.ofSeconds(2));
+                    .block(Duration.ofSeconds(2));//timeout - Thread blocking avoid , Resource exhaustion
         } catch (WebClientResponseException ex) {
             if (ex.getStatusCode() == HttpStatus.NOT_FOUND) {
                 throw new ProductNotFoundException("Product not found: " + productId, ex);

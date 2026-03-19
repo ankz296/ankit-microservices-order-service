@@ -15,6 +15,8 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.stereotype.Component;
 
+import java.time.Instant;
+
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -28,59 +30,74 @@ public class PaymentResultListener {
     @KafkaListener(topics = "payment.processed", groupId = "order-service-group")
     public void onPaymentProcessed(String message) {
         try {
-            PaymentProcessedEvent event = objectMapper.readValue(message, PaymentProcessedEvent.class);
-
+            PaymentProcessedEvent event =
+                    objectMapper.readValue(message, PaymentProcessedEvent.class);
 
             String eventId = event.getEventId();
+
             if (eventId == null || eventId.isBlank()) {
-                throw new IllegalArgumentException("Missing eventId in payment.processed payload");
+                log.error("Missing eventId in payment.processed payload message={}", message);
+                throw new IllegalArgumentException("Missing eventId");
             }
 
+            if (!idempotencyService.tryMarkProcessed(
+                    eventId,
+                    "order-service.payment-processed",
+                    EventType.PAYMENT_PROCESSED.name(),
+                    event.getOrderId())) {
 
-            if (!idempotencyService.tryMarkProcessed(eventId, "order-service.payment-processed",EventType.PAYMENT_PROCESSED.name(), event.getOrderId())) {
-                log.info("🔁 Duplicate payment.processed ignored eventId={}", eventId);
+                log.info("Duplicate payment.processed ignored eventId={}", eventId);
                 return;
             }
 
-            log.info("📥 Received payment.processed orderId={} paymentId={}",
-                    event.getOrderId(), event.getPaymentId());
+            log.info("Processing payment.processed eventId={}, orderId={}, paymentId={}",
+                    eventId, event.getOrderId(), event.getPaymentId());
 
             orderStatusService.markPaymentCompleted(event.getOrderId());
 
+            log.info("Order marked completed from payment event orderId={}", event.getOrderId());
+
         } catch (Exception e) {
-            log.error("❌ Failed to process payment.processed message={}", message, e);
-            throw new RuntimeException(e);
-            // IMPORTANT for retry+DLQ
+            log.error("Failed to process payment.processed payload={}, error={}",
+                    message, e.getMessage(), e);
+            throw new RuntimeException(e); // DLQ trigger
         }
     }
 
     @KafkaListener(topics = "payment.failed", groupId = "order-service-group")
     public void onPaymentFailed(String message) {
         try {
-            PaymentFailedEvent event = objectMapper.readValue(message, PaymentFailedEvent.class);
-
+            PaymentFailedEvent event =
+                    objectMapper.readValue(message, PaymentFailedEvent.class);
 
             String eventId = event.getEventId();
+
             if (eventId == null || eventId.isBlank()) {
-                throw new IllegalArgumentException("Missing eventId in payment.failed payload");
+                log.error("Missing eventId in payment.failed payload message={}", message);
+                throw new IllegalArgumentException("Missing eventId");
             }
 
-            if (!idempotencyService.tryMarkProcessed(eventId, "order-service.payment-failed",EventType.PAYMENT_FAILED.name(),event.getOrderId())) {
-                log.info("🔁 Duplicate payment.failed ignored eventId={}", eventId);
+            if (!idempotencyService.tryMarkProcessed(
+                    eventId,
+                    "order-service.payment-failed",
+                    EventType.PAYMENT_FAILED.name(),
+                    event.getOrderId())) {
+
+                log.info("Duplicate payment.failed ignored eventId={}", eventId);
                 return;
             }
 
-
-            log.info("📥 Received payment.failed orderId={} paymentId={} reason={}",
-                    event.getOrderId(), event.getPaymentId(), event.getReason());
+            log.warn("Processing payment.failed eventId={}, orderId={}, reason={}",
+                    eventId, event.getOrderId(), event.getReason());
 
             orderStatusService.markPaymentFailed(event.getOrderId());
 
+            // create cancel event
             OrderCancelledEvent cancelledEvent = new OrderCancelledEvent(
                     String.valueOf(System.currentTimeMillis()),
                     event.getOrderId(),
                     event.getReason(),
-                    java.time.Instant.now()
+                    Instant.now()
             );
 
             String payload = objectMapper.writeValueAsString(cancelledEvent);
@@ -93,12 +110,12 @@ public class PaymentResultListener {
 
             outboxRepository.save(outbox);
 
-            log.info("✅ ORDER_CANCELLED outbox created for orderId={}", event.getOrderId());
-
+            log.info("Order cancellation event stored in outbox orderId={}", event.getOrderId());
 
         } catch (Exception e) {
-            log.error("❌ Failed to process payment.failed message={}", message, e);
-            throw new RuntimeException(e); // ✅ IMPORTANT for retry+DLQ
+            log.error("Failed to process payment.failed payload={}, error={}",
+                    message, e.getMessage(), e);
+            throw new RuntimeException(e); // DLQ trigger
         }
     }
 }

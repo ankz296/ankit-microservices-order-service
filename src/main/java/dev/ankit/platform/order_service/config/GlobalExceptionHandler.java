@@ -1,10 +1,12 @@
 package dev.ankit.platform.order_service.config;
 
 
+import dev.ankit.platform.order_service.exception.BusinessException;
 import dev.ankit.platform.order_service.exception.DownstreamUnavailableException;
 import dev.ankit.platform.order_service.exception.ErrorResponse;
 import dev.ankit.platform.order_service.exception.OrderNotFoundException;
 import jakarta.servlet.http.HttpServletRequest;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -13,60 +15,67 @@ import org.springframework.web.bind.annotation.*;
 import java.time.OffsetDateTime;
 import java.util.stream.Collectors;
 
+@Slf4j
 @RestControllerAdvice
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(OrderNotFoundException.class)
     public ResponseEntity<ErrorResponse> handleNotFound(OrderNotFoundException ex, HttpServletRequest req) {
-        return ResponseEntity.status(HttpStatus.NOT_FOUND).body(
-                ErrorResponse.builder()
-                        .message(ex.getMessage())
-                        .path(req.getRequestURI())
-                        .status(404)
-                        .timestamp(OffsetDateTime.now())
-                        .build()
-        );
+
+        log.warn("Order not found path={}, message={}", req.getRequestURI(), ex.getMessage());
+
+        return buildResponse(HttpStatus.NOT_FOUND, ex.getMessage(), req);
     }
 
     @ExceptionHandler(MethodArgumentNotValidException.class)
     public ResponseEntity<ErrorResponse> handleValidation(MethodArgumentNotValidException ex, HttpServletRequest req) {
+
         String msg = ex.getBindingResult().getFieldErrors().stream()
                 .map(fe -> fe.getField() + ": " + fe.getDefaultMessage())
                 .collect(Collectors.joining(", "));
 
-        return ResponseEntity.status(HttpStatus.BAD_REQUEST).body(
-                ErrorResponse.builder()
-                        .message(msg)
-                        .path(req.getRequestURI())
-                        .status(400)
-                        .timestamp(OffsetDateTime.now())
-                        .build()
-        );
+        log.warn("Validation failed path={}, errors={}", req.getRequestURI(), msg);
+
+        return buildResponse(HttpStatus.BAD_REQUEST, msg, req);
+    }
+
+    @ExceptionHandler(BusinessException.class)
+    public ResponseEntity<ErrorResponse> handleBusiness(BusinessException ex, HttpServletRequest req) {
+
+        log.warn("Business exception path={}, message={}", req.getRequestURI(), ex.getMessage());
+
+        return buildResponse(HttpStatus.BAD_REQUEST, ex.getMessage(), req);
+    }
+
+    @ExceptionHandler(DownstreamUnavailableException.class)
+    public ResponseEntity<ErrorResponse> handleDownstreamUnavailable(DownstreamUnavailableException ex, HttpServletRequest req) {
+
+        log.error("Downstream unavailable path={}, message={}", req.getRequestURI(), ex.getMessage());
+
+        return buildResponse(HttpStatus.SERVICE_UNAVAILABLE, ex.getMessage(), req);
     }
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGeneric(Exception ex, HttpServletRequest req) {
-        return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR).body(
+
+        log.error("Unhandled exception path={}, error={}", req.getRequestURI(), ex.getMessage(), ex);
+
+        return buildResponse(HttpStatus.INTERNAL_SERVER_ERROR, "Internal server error", req);
+    }
+
+    // 🔥 Common builder
+    private ResponseEntity<ErrorResponse> buildResponse(HttpStatus status, String message, HttpServletRequest req) {
+
+        String traceId = org.slf4j.MDC.get("traceId");
+
+        return ResponseEntity.status(status).body(
                 ErrorResponse.builder()
-                        .message("Internal error: " + ex.getMessage())
+                        .message(message)
                         .path(req.getRequestURI())
-                        .status(500)
+                        .status(status.value())
                         .timestamp(OffsetDateTime.now())
+                        .traceId(traceId)   // 🔥 ADD THIS FIELD
                         .build()
         );
     }
-
-    @ExceptionHandler(dev.ankit.platform.order_service.exception.DownstreamUnavailableException.class)
-    public ResponseEntity<ErrorResponse> handleDownstreamUnavailable(DownstreamUnavailableException ex, HttpServletRequest req) {
-//        return ResponseEntity.status(503).body(new ErrorResponse("DOWNSTREAM_UNAVAILABLE", ex.getMessage()));
-        return ResponseEntity.status(503).body(
-                ErrorResponse.builder()
-                        .message("DOWNSTREAM_UNAVAILABLE" + ex.getMessage())
-                        .path(req.getRequestURI())
-                        .status(503)
-                        .timestamp(OffsetDateTime.now())
-                        .build()
-        );
-    }
-
 }

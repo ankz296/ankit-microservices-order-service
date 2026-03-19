@@ -15,4 +15,6 @@ public class ErrorResponse {
     private String path;
     private int status;
     private OffsetDateTime timestamp;
+
+    private String traceId; // 🔥 VERY IMPORTANT
 }
