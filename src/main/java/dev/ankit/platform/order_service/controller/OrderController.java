@@ -7,6 +7,7 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
@@ -23,13 +24,15 @@ public class OrderController {
     private final OrderService orderService;
 
     @PostMapping
-    public ResponseEntity<OrderResponse> create(@Valid @RequestBody CreateOrderRequest request) {
+    @PreAuthorize("hasAuthority('ROLE_USER')")
+    public ResponseEntity<OrderResponse> create(@RequestHeader("X-User-Id") String userId,
+                                                @Valid @RequestBody CreateOrderRequest request) {
 
         log.info("Received create order request for userId={}, itemsCount={}",
-                request.userId(),
+                userId,
                 request.items() != null ? request.items().size() : 0);
 
-        OrderResponse response = orderService.createOrder(request);
+        OrderResponse response = orderService.createOrder(request, userId);
 
         log.info("Order created successfully with orderId={}", response.getOrderId());
 
@@ -37,7 +40,7 @@ public class OrderController {
     }
 
     @GetMapping("/{id}")
-    public ResponseEntity<OrderResponse> getById(@PathVariable UUID id) {
+    public ResponseEntity<OrderResponse> getById(@RequestHeader("X-User-Id") String userId, @PathVariable UUID id) {
 
         log.info("Fetching order by id={}", id);
 
@@ -49,7 +52,7 @@ public class OrderController {
     }
 
     @GetMapping("/user/{userId}")
-    public ResponseEntity<List<OrderResponse>> getByUser(@PathVariable UUID userId) {
+    public ResponseEntity<List<OrderResponse>> getByUser(@RequestHeader("X-User-Id") String userId) {
 
         log.info("Fetching orders for userId={}", userId);
 

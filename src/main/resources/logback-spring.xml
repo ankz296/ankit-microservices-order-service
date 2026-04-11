@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<configuration>
+
+    <appender name="CONSOLE" class="ch.qos.logback.core.ConsoleAppender">
+        <encoder>
+            <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSS} %-5level [%X{traceId}-%X{spanId}] %logger{36} - %msg%n</pattern>
+        </encoder>
+    </appender>
+    <springProfile name="docker">
+        <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+            <http>
+                <url>http://loki:3100/loki/api/v1/push</url>
+            </http>
+            <format>
+                <label>
+                    <pattern>service=order-service,level=%level</pattern>
+                </label>
+                <message>
+                    <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSS} %-5level [%X{traceId}-%X{spanId}] %logger{36} - %msg%n</pattern>
+                </message>
+                <sortByTime>true</sortByTime>
+            </format>
+        </appender>
+    </springProfile>
+    <springProfile name="k8s | gcp">
+        <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+            <http>
+                <url>http://loki:3100/loki/api/v1/push</url>
+            </http>
+            <format>
+                <label>
+                    <pattern>service=order-service,level=%level</pattern>
+                </label>
+                <message>
+                    <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSS} %-5level [%X{traceId}-%X{spanId}] %logger{36} - %msg%n</pattern>
+                </message>
+                <sortByTime>true</sortByTime>
+            </format>
+        </appender>
+    </springProfile>
+    <springProfile name="!docker &amp; !k8s &amp; !gcp">
+        <appender name="LOKI" class="com.github.loki4j.logback.Loki4jAppender">
+            <http>
+                <url>http://localhost:3100/loki/api/v1/push</url>
+            </http>
+            <format>
+                <label>
+                    <pattern>service=order-service,level=%level</pattern>
+                </label>
+                <message>
+                    <pattern>%d{yyyy-MM-dd'T'HH:mm:ss.SSS} %-5level [%X{traceId}-%X{spanId}] %logger{36} - %msg%n</pattern>
+                </message>
+                <sortByTime>true</sortByTime>
+            </format>
+        </appender>
+    </springProfile>
+
+    <root level="INFO">
+        <appender-ref ref="CONSOLE"/>
+        <appender-ref ref="LOKI"/>
+    </root>
+
+</configuration>

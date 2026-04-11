@@ -1,5 +1,6 @@
 package dev.ankit.platform.order_service.client;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -8,13 +9,19 @@ import org.springframework.web.reactive.function.client.WebClientResponseExcepti
 import java.time.Duration;
 import java.util.UUID;
 
+@Slf4j
 @Component
 public class UserClient {
 
     private final WebClient webClient;
 
     public UserClient(WebClient.Builder webClientBuilder) {
-        this.webClient = webClientBuilder.build();
+        this.webClient = webClientBuilder
+                .filter((request, next) -> {
+                    log.error("🔥 OUTGOING HEADERS: {}", request.headers());
+                    return next.exchange(request);
+                })
+                .build();
     }
 
     public UserInternalDto getUser(UUID userId) {

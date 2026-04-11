@@ -1,5 +1,6 @@
 package dev.ankit.platform.order_service.client;
 
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpStatus;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
@@ -10,12 +11,18 @@ import java.math.BigDecimal;
 import java.util.UUID;
 
 @Component
+@Slf4j
 public class ProductClient {
 
     private final WebClient webClient;
 
     public ProductClient(WebClient.Builder webClientBuilder) {
-        this.webClient = webClientBuilder.build();
+        this.webClient = webClientBuilder
+                .filter((request, next) -> {
+                    log.error("🔥 OUTGOING HEADERS: {}", request.headers());
+                    return next.exchange(request);
+                })
+                .build();
     }
 
     public ProductInternalDto getProduct(String productId) {

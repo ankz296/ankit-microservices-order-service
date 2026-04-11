@@ -35,23 +35,23 @@ public class OrderService {
     private final DownstreamValidationService downstreamValidationService;
 
     @Transactional
-    public OrderResponse createOrder(CreateOrderRequest request) {
+    public OrderResponse createOrder(CreateOrderRequest request,String userId) {
         log.info("Starting order creation for userId={}, itemsCount={}",
-                request.userId(),
+                userId,
                 request.items() != null ? request.items().size() : 0);
 
         // 1) User validation
-        UserClient.UserInternalDto user = downstreamValidationService.fetchUser(request.userId());
+        UserClient.UserInternalDto user = downstreamValidationService.fetchUser(UUID.fromString(userId));
 
         if (!user.active()) {
-            log.warn("User is inactive userId={}", request.userId());
-            throw new BusinessException("User is not active: " + request.userId());
+            log.warn("User is inactive userId={}", userId);
+            throw new BusinessException("User is not active: " + userId);
         }
 
         BigDecimal total = BigDecimal.ZERO;
 
         Order order = new Order();
-        order.setUserId(request.userId());
+        order.setUserId(UUID.fromString(userId));
         order.setStatus(OrderStatus.CREATED);
         /**
          * Example flow (our project):
@@ -141,8 +141,8 @@ public class OrderService {
     }
 
     @Transactional(readOnly = true)
-    public List<OrderResponse> getOrdersByUser(UUID userId) {
-        return orderRepository.findByUserId(userId)
+    public List<OrderResponse> getOrdersByUser(String userId) {
+        return orderRepository.findByUserId(UUID.fromString(userId))
                 .stream()
                 .map(this::mapToResponse)
                 .toList();

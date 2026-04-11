@@ -1,6 +1,7 @@
 package dev.ankit.platform.order_service.config;
 
 
+import io.micrometer.observation.ObservationRegistry;
 import io.netty.channel.ChannelOption;
 import io.netty.handler.timeout.ReadTimeoutHandler;
 import io.netty.handler.timeout.WriteTimeoutHandler;
@@ -19,18 +20,19 @@ import java.util.concurrent.TimeUnit;
 public class WebClientConfig {
 
     @Bean
-    public WebClientCustomizer webClientCustomizer() {
-        return builder -> {
+    @LoadBalanced
+    public WebClient.Builder webClientBuilder(ObservationRegistry observationRegistry) {
 
-            HttpClient httpClient = HttpClient.create()
-                    .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 800)
-                    .responseTimeout(Duration.ofMillis(1200))
-                    .doOnConnected(conn -> conn
-                            .addHandlerLast(new ReadTimeoutHandler(1200, TimeUnit.MILLISECONDS))
-                            .addHandlerLast(new WriteTimeoutHandler(1200, TimeUnit.MILLISECONDS))
-                    );
+        HttpClient httpClient = HttpClient.create()
+                .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 800)
+                .responseTimeout(Duration.ofMillis(1200))
+                .doOnConnected(conn -> conn
+                        .addHandlerLast(new ReadTimeoutHandler(1200, TimeUnit.MILLISECONDS))
+                        .addHandlerLast(new WriteTimeoutHandler(1200, TimeUnit.MILLISECONDS))
+                );
 
-            builder.clientConnector(new ReactorClientHttpConnector(httpClient));
-        };
+        return WebClient.builder()
+                .clientConnector(new ReactorClientHttpConnector(httpClient))
+                .observationRegistry(observationRegistry); // ← Yeh line add kar
     }
 }

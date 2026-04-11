@@ -16,7 +16,7 @@ import java.time.OffsetDateTime;
 import java.util.stream.Collectors;
 
 @Slf4j
-@RestControllerAdvice
+@RestControllerAdvice(basePackages = "dev.ankit.platform.order_service")
 public class GlobalExceptionHandler {
 
     @ExceptionHandler(OrderNotFoundException.class)
