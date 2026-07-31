@@ -1,6 +1,7 @@
 package dev.ankit.platform.order_service.services;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import dev.ankit.platform.order_service.application.command.OrderCommandService;
 import dev.ankit.platform.order_service.client.ProductClient;
 import dev.ankit.platform.order_service.client.UserClient;
 import dev.ankit.platform.order_service.domain.Order;
@@ -13,6 +14,8 @@ import dev.ankit.platform.order_service.exception.OrderNotFoundException;
 import dev.ankit.platform.order_service.outbox.EventType;
 import dev.ankit.platform.order_service.outbox.OrderOutbox;
 import dev.ankit.platform.order_service.outbox.OutboxStatus;
+import dev.ankit.platform.order_service.persistence.routing.ShardExecutionTemplate;
+import dev.ankit.platform.order_service.persistence.routing.ShardKeyResolver;
 import dev.ankit.platform.order_service.repository.OrderOutboxRepository;
 import dev.ankit.platform.order_service.repository.OrderRepository;
 import lombok.RequiredArgsConstructor;
@@ -21,131 +24,128 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.math.BigDecimal;
-import java.util.*;
+import java.util.LinkedHashMap;
+import java.util.Map;
+import java.util.UUID;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
-public class OrderService {
+public class OrderService implements OrderCommandService {
 
     private final OrderRepository orderRepository;
     private final OrderOutboxRepository outboxRepository;
-    private final ObjectMapper objectMapper; // Spring Boot auto-configured
+    private final ObjectMapper objectMapper;
     private final UserClient userClient;
     private final DownstreamValidationService downstreamValidationService;
+    private final ShardKeyResolver shardKeyResolver;
+    private final ShardExecutionTemplate shardExecutionTemplate;
 
+    @Override
     @Transactional
-    public OrderResponse createOrder(CreateOrderRequest request,String userId) {
-        log.info("Starting order creation for userId={}, itemsCount={}",
-                userId,
-                request.items() != null ? request.items().size() : 0);
+    public OrderResponse createOrder(CreateOrderRequest request, String userId) {
+        String shardId = shardKeyResolver.resolveShard(userId);
+        return shardExecutionTemplate.executeWrite(shardId, () -> {
+            log.info("Starting order creation on write path shardId={}, userId={}, itemsCount={}",
+                    shardId,
+                    userId,
+                    request.items() != null ? request.items().size() : 0);
 
-        // 1) User validation
-        UserClient.UserInternalDto user = downstreamValidationService.fetchUser(UUID.fromString(userId));
-
-        if (!user.active()) {
-            log.warn("User is inactive userId={}", userId);
-            throw new BusinessException("User is not active: " + userId);
-        }
-
-        BigDecimal total = BigDecimal.ZERO;
-
-        Order order = new Order();
-        order.setUserId(UUID.fromString(userId));
-        order.setStatus(OrderStatus.CREATED);
-        /**
-         * Example flow (our project):
-         *
-         * Order-service calls product-service
-         * If slow → Timeout
-         * Retry 3 times
-         * Still fail → count failure
-         * Circuit OPEN
-         * Instant fallback (fail fast)
-         * After 10s → HALF_OPEN
-         * If healthy → CLOSED
-         */
-        for (CreateOrderRequest.OrderItemRequest item : request.items()) {
-
-            log.debug("Validating product productId={}, quantity={}",
-                    item.productId(), item.quantity());
-
-            ProductClient.ProductInternalDto p =
-                    downstreamValidationService.fetchProduct(item.productId());
-
-            if (!p.available()) {
-                log.warn("Product not available productId={}", item.productId());
-                throw new BusinessException("Product not available: " + item.productId());
+            UserClient.UserInternalDto user = downstreamValidationService.fetchUser(UUID.fromString(userId));
+            if (!user.active()) {
+                log.warn("User is inactive userId={}", userId);
+                throw new BusinessException("User is not active: " + userId);
             }
 
-            if (p.stock() == null || p.stock() < item.quantity()) {
-                log.warn("Insufficient stock productId={}, stock={}, requested={}",
-                        item.productId(), p.stock(), item.quantity());
-                throw new BusinessException("Insufficient stock for productId=" + item.productId());
+            BigDecimal total = BigDecimal.ZERO;
+            Order order = new Order();
+            order.setUserId(UUID.fromString(userId));
+            order.setStatus(OrderStatus.CREATED);
+
+            for (CreateOrderRequest.OrderItemRequest item : request.items()) {
+                log.debug("Validating product productId={}, quantity={}", item.productId(), item.quantity());
+
+                ProductClient.ProductInternalDto product =
+                        downstreamValidationService.fetchProduct(item.productId());
+
+                if (!product.available()) {
+                    throw new BusinessException("Product not available: " + item.productId());
+                }
+                if (product.stock() == null || product.stock() < item.quantity()) {
+                    throw new BusinessException("Insufficient stock for productId=" + item.productId());
+                }
+                if (product.price() == null) {
+                    throw new BusinessException("Product price missing for productId=" + item.productId());
+                }
+
+                OrderItem orderItem = new OrderItem(item.productId(), item.quantity(), product.price());
+                order.addItem(orderItem);
+                total = total.add(orderItem.getLineTotal());
             }
 
-            if (p.price() == null) {
-                log.error("Product price missing productId={}", item.productId());
-                throw new BusinessException("Product price missing for productId=" + item.productId());
-            }
+            order.setTotalAmount(total);
+            Order saved = orderRepository.save(order);
 
-            OrderItem oi = new OrderItem(item.productId(), item.quantity(), p.price());
-            order.addItem(oi);
+            Map<String, Object> eventPayload = new LinkedHashMap<>();
+            eventPayload.put("orderId", saved.getId());
+            eventPayload.put("userId", saved.getUserId());
+            eventPayload.put("totalAmount", saved.getTotalAmount());
+            eventPayload.put("status", saved.getStatus());
+            eventPayload.put("eventTime", System.currentTimeMillis());
 
-            total = total.add(oi.getLineTotal());
-        }
+            OrderOutbox outbox = OrderOutbox.builder()
+                    .aggregateId(saved.getId())
+                    .eventType(EventType.ORDER_CREATED.name())
+                    .payload(toJson(eventPayload))
+                    .status(OutboxStatus.NEW)
+                    .build();
 
-        order.setTotalAmount(total);
+            outboxRepository.save(outbox);
 
-        Order saved = orderRepository.save(order);
-
-        log.info("Order persisted successfully orderId={}, totalAmount={}",
-                saved.getId(), saved.getTotalAmount());
-
-        // Outbox event
-        Map<String, Object> eventPayload = new LinkedHashMap<>();
-        eventPayload.put("orderId", saved.getId());
-        eventPayload.put("userId", saved.getUserId());
-        eventPayload.put("totalAmount", saved.getTotalAmount());
-        eventPayload.put("status", saved.getStatus());
-        eventPayload.put("eventTime", System.currentTimeMillis());
-
-        String payloadJson = toJson(eventPayload);
-
-        OrderOutbox outbox = OrderOutbox.builder()
-                .aggregateId(saved.getId())
-                .eventType(EventType.ORDER_CREATED.name())
-                .payload(payloadJson)
-                .status(OutboxStatus.NEW)
-                .build();
-
-        outboxRepository.save(outbox);
-
-        log.info("Outbox event created for orderId={}, eventType=ORDER_CREATED", saved.getId());
-
-        return mapToResponse(saved);
+            log.info("Order persisted and outbox captured shardId={}, orderId={}, totalAmount={}",
+                    shardId, saved.getId(), saved.getTotalAmount());
+            return mapToResponse(saved);
+        });
     }
 
-    @Transactional(readOnly = true)
-    public OrderResponse getOrder(UUID orderId) {
+    @Override
+    @Transactional
+    public void markPaymentCompleted(UUID orderId, String userId) {
+        String shardId = shardKeyResolver.resolveShard(userId);
+        shardExecutionTemplate.executeWrite(shardId, () -> {
+            log.info("Processing payment success on write path shardId={}, orderId={}", shardId, orderId);
+            Order order = orderRepository.findByIdForUpdate(orderId)
+                    .orElseThrow(() -> new OrderNotFoundException(orderId));
 
-        log.info("Fetching order by id={}", orderId);
+            if (order.getStatus() == OrderStatus.PAYMENT_COMPLETED) {
+                log.info("Duplicate payment success ignored orderId={}", orderId);
+                return null;
+            }
 
-        Order order = orderRepository.findById(orderId)
-                .orElseThrow(() -> {
-                    log.warn("Order not found orderId={}", orderId);
-                    return new OrderNotFoundException(orderId);
-                });
-
-        return mapToResponse(order);
+            order.setStatus(OrderStatus.PAYMENT_COMPLETED);
+            log.info("Order marked as PAYMENT_COMPLETED shardId={}, orderId={}", shardId, orderId);
+            return null;
+        });
     }
 
-    @Transactional(readOnly = true)
-    public List<OrderResponse> getOrdersByUser(String userId) {
-        return orderRepository.findByUserId(UUID.fromString(userId))
-                .stream()
-                .map(this::mapToResponse)
-                .toList();
+    @Override
+    @Transactional
+    public void markPaymentFailed(UUID orderId, String userId) {
+        String shardId = shardKeyResolver.resolveShard(userId);
+        shardExecutionTemplate.executeWrite(shardId, () -> {
+            log.info("Processing payment failure on write path shardId={}, orderId={}", shardId, orderId);
+            Order order = orderRepository.findByIdForUpdate(orderId)
+                    .orElseThrow(() -> new OrderNotFoundException(orderId));
+
+            if (order.getStatus() == OrderStatus.PAYMENT_FAILED) {
+                log.info("Duplicate payment failure ignored orderId={}", orderId);
+                return null;
+            }
+
+            order.setStatus(OrderStatus.PAYMENT_FAILED);
+            log.warn("Order marked as PAYMENT_FAILED shardId={}, orderId={}", shardId, orderId);
+            return null;
+        });
     }
 
     private OrderResponse mapToResponse(Order order) {
@@ -165,41 +165,4 @@ public class OrderService {
             throw new BusinessException("Failed to serialize outbox payload");
         }
     }
-
-
-    @Transactional
-    public void markPaymentCompleted(UUID orderId) {
-        log.info("Processing payment success for orderId={}", orderId);
-        Order order = orderRepository.findByIdForUpdate(orderId)
-                .orElseThrow(() -> new OrderNotFoundException(orderId));
-
-        // ✅ idempotency: if already final, ignore
-        if (order.getStatus() == OrderStatus.PAYMENT_COMPLETED) {
-            log.info("Duplicate payment success ignored orderId={}", orderId);
-            return;
-        }
-        order.setStatus(OrderStatus.PAYMENT_COMPLETED);
-        // No explicit save() needed if entity is managed in transaction
-        //transaction end pe Hibernate automatically dirty checking karta hai
-        log.info("Order marked as PAYMENT_COMPLETED orderId={}", orderId);
-    }
-
-    @Transactional
-    public void markPaymentFailed(UUID orderId) {
-        log.info("Processing payment failure for orderId={}", orderId);
-        Order order = orderRepository.findByIdForUpdate(orderId)
-                .orElseThrow(() -> new OrderNotFoundException(orderId));
-
-        // ✅ idempotency: if already failed, ignore
-        if (order.getStatus() == OrderStatus.PAYMENT_FAILED) {
-            log.info("Duplicate payment failure ignored orderId={}", orderId);
-            return;
-        }
-
-        order.setStatus(OrderStatus.PAYMENT_FAILED);
-        // No explicit save() needed if entity is managed in transaction
-        //transaction end pe Hibernate automatically dirty checking karta hai
-        log.warn("Order marked as PAYMENT_FAILED orderId={}", orderId);
-    }
-
 }

@@ -53,7 +53,7 @@ public class PaymentResultListener {
             log.info("Processing payment.processed eventId={}, orderId={}, paymentId={}",
                     eventId, event.getOrderId(), event.getPaymentId());
 
-            orderStatusService.markPaymentCompleted(event.getOrderId());
+            orderStatusService.markPaymentCompleted(event.getOrderId(), event.getUserId().toString());
 
             log.info("Order marked completed from payment event orderId={}", event.getOrderId());
 
@@ -90,7 +90,7 @@ public class PaymentResultListener {
             log.warn("Processing payment.failed eventId={}, orderId={}, reason={}",
                     eventId, event.getOrderId(), event.getReason());
 
-            orderStatusService.markPaymentFailed(event.getOrderId());
+            orderStatusService.markPaymentFailed(event.getOrderId(), event.getUserId().toString());
 
             // create cancel event
             OrderCancelledEvent cancelledEvent = new OrderCancelledEvent(
